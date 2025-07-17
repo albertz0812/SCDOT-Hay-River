@@ -4,32 +4,134 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HAY RIVER A: SCDOT Interactive Analysis</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.8.0/Recharts.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .controls {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .slider-container {
+            margin: 20px 0;
+        }
+        .slider {
+            width: 300px;
+            margin: 0 10px;
+        }
+        .threshold-display {
+            background: #007cba;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 5px;
+            display: inline-block;
+            margin: 0 10px;
+            font-weight: bold;
+        }
+        .threshold-buttons {
+            margin: 15px 0;
+        }
+        .threshold-btn {
+            background: #f0f0f0;
+            border: 1px solid #ccc;
+            padding: 5px 10px;
+            margin: 2px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .threshold-btn.active {
+            background: #007cba;
+            color: white;
+        }
+        .threshold-btn:hover {
+            background: #e0e0e0;
+        }
+        .threshold-btn.active:hover {
+            background: #005a87;
+        }
+        #plot {
+            width: 100%;
+            height: 500px;
+            margin: 20px 0;
+        }
+        .summary {
+            background: #f8f8f8;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        .error {
+            background: #ffebee;
+            border: 1px solid #f44336;
+            color: #d32f2f;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-size: 18px;
+            color: #666;
+        }
+    </style>
 </head>
 <body>
-    <div id="root"></div>
+    <div class="container">
+        <h1 id="title">HAY RIVER A: SCDOT Length and Count Trends (≥ 30 cm)</h1>
+        
+        <div class="controls">
+            <div class="slider-container">
+                <label>Snow Depth Threshold: </label>
+                <span>10cm</span>
+                <input type="range" id="thresholdSlider" class="slider" min="10" max="90" step="10" value="30">
+                <span>90cm</span>
+                <div class="threshold-display" id="currentThreshold">30cm</div>
+            </div>
+            
+            <div class="threshold-buttons" id="thresholdButtons">
+                <!-- Buttons will be populated by JavaScript -->
+            </div>
+        </div>
 
-    <script type="text/babel">
-        const { useState, useEffect } = React;
-        const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } = Recharts;
+        <div id="error" class="error" style="display: none;"></div>
+        <div id="loading" class="loading">Loading data...</div>
+        <div id="plot"></div>
+        
+        <div id="summary" class="summary" style="display: none;">
+            <h3>Data Summary</h3>
+            <div id="summaryContent"></div>
+        </div>
+    </div>
 
-        const SCDOTInteractivePlot = () => {
-          const [threshold, setThreshold] = useState(30);
-          const [allData, setAllData] = useState([]);
-          const [filteredData, setFilteredData] = useState([]);
-          const [loading, setLoading] = useState(true);
-          const [error, setError] = useState(null);
-          const [trendLines, setTrendLines] = useState({ count: null, length: null });
-          const [availableThresholds, setAvailableThresholds] = useState([]);
+    <script>
+        console.log('Script starting...');
+        
+        let allData = [];
+        let availableThresholds = [];
+        let currentThreshold = 30;
 
-          // Function to calculate linear regression
-          const calculateLinearRegression = (data, xKey, yKey) => {
-            const validData = data.filter(d => d[xKey] != null && d[yKey] != null);
+        // Linear regression function
+        function calculateLinearRegression(data, xKey, yKey) {
+            const validData = data.filter(d => d[xKey] != null && d[yKey] != null && !isNaN(d[xKey]) && !isNaN(d[yKey]));
             const n = validData.length;
             
             if (n < 2) return null;
@@ -43,341 +145,229 @@
             const intercept = (sumY - slope * sumX) / n;
             
             return { slope, intercept };
-          };
+        }
 
-          // Load all data once at startup
-          useEffect(() => {
-            const loadAllData = async () => {
-              try {
-                setLoading(true);
-                setError(null);
-                
+        // Load and parse CSV data
+        async function loadData() {
+            try {
+                console.log('Attempting to load CSV...');
                 const response = await fetch('HAY RIVER A_all_threshold_detailed_results.csv');
-                if (!response.ok) {
-                  throw new Error(`Failed to load CSV file: ${response.status}`);
-                }
-                const fileContent = await response.text();
                 
-                const parsed = Papa.parse(fileContent, {
-                  header: true,
-                  dynamicTyping: true,
-                  skipEmptyLines: true,
-                  delimitersToGuess: [',', '\t', '|', ';']
+                if (!response.ok) {
+                    throw new Error(`Failed to load CSV: ${response.status} ${response.statusText}`);
+                }
+                
+                const csvText = await response.text();
+                console.log('CSV loaded, parsing...');
+                
+                const parsed = Papa.parse(csvText, {
+                    header: true,
+                    dynamicTyping: true,
+                    skipEmptyLines: true
                 });
                 
-                if (parsed.errors.length > 0) {
-                  throw new Error(`CSV parsing error: ${parsed.errors[0].message}`);
+                if (parsed.errors && parsed.errors.length > 0) {
+                    console.warn('CSV parsing warnings:', parsed.errors);
                 }
                 
-                // Process the data
-                const processedData = parsed.data
-                  .filter(row => row.start_year && !isNaN(row.start_year) && row.threshold != null)
-                  .map(row => ({
-                    threshold: row.threshold,
-                    year: row.start_year,
-                    scdot_count: row.scdot_count,
-                    scdot_length: row.scdot_length,
-                    snow_year: row.snow_year,
-                    scdot_percentage: row.scdot_percentage,
-                    max_consecutive_days: row.max_consecutive_days,
-                    number_of_events: row.number_of_events
-                  }))
-                  .sort((a, b) => a.year - b.year);
+                // Process data
+                allData = parsed.data
+                    .filter(row => row.start_year && !isNaN(row.start_year) && row.threshold != null)
+                    .map(row => ({
+                        threshold: parseInt(row.threshold),
+                        year: parseInt(row.start_year),
+                        scdot_count: parseInt(row.scdot_count) || 0,
+                        scdot_length: parseInt(row.scdot_length) || 0,
+                        snow_year: row.snow_year,
+                        scdot_percentage: parseFloat(row.scdot_percentage) || 0,
+                        number_of_events: parseInt(row.number_of_events) || 0
+                    }));
                 
-                setAllData(processedData);
+                console.log('Data processed:', allData.length, 'rows');
                 
-                // Extract available thresholds
-                const thresholds = [...new Set(processedData.map(row => row.threshold))].sort((a, b) => a - b);
-                setAvailableThresholds(thresholds);
+                // Get available thresholds
+                availableThresholds = [...new Set(allData.map(row => row.threshold))].sort((a, b) => a - b);
+                console.log('Available thresholds:', availableThresholds);
                 
-              } catch (err) {
-                setError(err.message);
-              } finally {
-                setLoading(false);
-              }
+                // Create threshold buttons
+                createThresholdButtons();
+                
+                // Hide loading, show plot
+                document.getElementById('loading').style.display = 'none';
+                updatePlot();
+                
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').textContent = `Error: ${error.message}`;
+                document.getElementById('error').style.display = 'block';
+            }
+        }
+
+        // Create threshold buttons
+        function createThresholdButtons() {
+            const container = document.getElementById('thresholdButtons');
+            container.innerHTML = '<span>Available thresholds: </span>';
+            
+            availableThresholds.forEach(threshold => {
+                const button = document.createElement('button');
+                button.className = 'threshold-btn';
+                button.textContent = threshold + 'cm';
+                button.onclick = () => setThreshold(threshold);
+                container.appendChild(button);
+            });
+            
+            updateThresholdButtons();
+        }
+
+        // Update threshold buttons appearance
+        function updateThresholdButtons() {
+            const buttons = document.querySelectorAll('.threshold-btn');
+            buttons.forEach(button => {
+                const threshold = parseInt(button.textContent);
+                button.className = threshold === currentThreshold ? 'threshold-btn active' : 'threshold-btn';
+            });
+        }
+
+        // Set threshold
+        function setThreshold(threshold) {
+            currentThreshold = threshold;
+            document.getElementById('thresholdSlider').value = threshold;
+            document.getElementById('currentThreshold').textContent = threshold + 'cm';
+            document.getElementById('title').textContent = `HAY RIVER A: SCDOT Length and Count Trends (≥ ${threshold} cm)`;
+            updateThresholdButtons();
+            updatePlot();
+        }
+
+        // Update plot
+        function updatePlot() {
+            const filteredData = allData.filter(row => row.threshold === currentThreshold);
+            
+            if (filteredData.length === 0) {
+                document.getElementById('plot').innerHTML = '<p style="text-align: center; padding: 50px;">No data available for this threshold.</p>';
+                return;
+            }
+
+            // Sort by year
+            filteredData.sort((a, b) => a.year - b.year);
+            
+            const years = filteredData.map(d => d.year);
+            const countData = filteredData.map(d => d.scdot_count);
+            const lengthData = filteredData.map(d => d.scdot_length);
+            
+            // Calculate trend lines
+            const countTrend = calculateLinearRegression(filteredData, 'year', 'scdot_count');
+            const lengthTrend = calculateLinearRegression(filteredData, 'year', 'scdot_length');
+            
+            const minYear = Math.min(...years);
+            const maxYear = Math.max(...years);
+            
+            const traces = [
+                {
+                    x: years,
+                    y: countData,
+                    mode: 'markers',
+                    type: 'scatter',
+                    name: 'SCDOT Count',
+                    marker: { color: '#ff7300', size: 6 }
+                },
+                {
+                    x: years,
+                    y: lengthData,
+                    mode: 'markers',
+                    type: 'scatter',
+                    name: 'SCDOT Length',
+                    marker: { color: '#387908', size: 6 }
+                }
+            ];
+            
+            // Add trend lines
+            if (countTrend) {
+                traces.push({
+                    x: [minYear, maxYear],
+                    y: [countTrend.slope * minYear + countTrend.intercept, countTrend.slope * maxYear + countTrend.intercept],
+                    mode: 'lines',
+                    type: 'scatter',
+                    name: 'Count Trend',
+                    line: { color: '#ff7300', dash: 'dash', width: 2 }
+                });
+            }
+            
+            if (lengthTrend) {
+                traces.push({
+                    x: [minYear, maxYear],
+                    y: [lengthTrend.slope * minYear + lengthTrend.intercept, lengthTrend.slope * maxYear + lengthTrend.intercept],
+                    mode: 'lines',
+                    type: 'scatter',
+                    name: 'Length Trend',
+                    line: { color: '#387908', dash: 'dash', width: 2 }
+                });
+            }
+            
+            const layout = {
+                title: '',
+                xaxis: {
+                    title: 'Year',
+                    range: [minYear - 1, maxYear + 1],
+                    dtick: 5,
+                    gridcolor: '#e0e0e0'
+                },
+                yaxis: {
+                    title: 'Days',
+                    range: [0, 220],
+                    dtick: 20,
+                    gridcolor: '#e0e0e0'
+                },
+                plot_bgcolor: 'white',
+                paper_bgcolor: 'white',
+                hovermode: 'closest'
             };
             
-            loadAllData();
-          }, []);
-
-          // Filter data and calculate trends when threshold changes
-          useEffect(() => {
-            if (allData.length > 0) {
-              const filtered = allData.filter(row => row.threshold === threshold);
-              setFilteredData(filtered);
-              
-              // Calculate trend lines for this threshold
-              const countTrend = calculateLinearRegression(filtered, 'year', 'scdot_count');
-              const lengthTrend = calculateLinearRegression(filtered, 'year', 'scdot_length');
-              
-              setTrendLines({ count: countTrend, length: lengthTrend });
-            }
-          }, [allData, threshold]);
-
-          // Generate trend line data points
-          const getTrendLineData = (trendLine, minYear, maxYear) => {
-            if (!trendLine) return [];
+            Plotly.newPlot('plot', traces, layout, {responsive: true});
             
-            return [
-              { year: minYear, value: trendLine.slope * minYear + trendLine.intercept },
-              { year: maxYear, value: trendLine.slope * maxYear + trendLine.intercept }
-            ];
-          };
+            // Update summary
+            updateSummary(filteredData, countTrend, lengthTrend);
+        }
 
-          // Custom tooltip
-          const CustomTooltip = ({ active, payload, label }) => {
-            if (active && payload && payload.length) {
-              const dataPoint = filteredData.find(d => d.year === label);
-              return React.createElement('div', {
-                className: "bg-white p-3 border border-gray-300 rounded shadow-lg"
-              }, [
-                React.createElement('p', { key: 'year', className: "font-semibold" }, `Year: ${label}`),
-                React.createElement('p', { key: 'snow-year', className: "text-sm text-gray-600" }, `Snow Year: ${dataPoint?.snow_year || 'N/A'}`),
-                ...payload.map((entry, index) => 
-                  React.createElement('p', { 
-                    key: index, 
-                    style: { color: entry.color } 
-                  }, `${entry.name}: ${entry.value} days`)
-                ),
-                dataPoint && React.createElement('p', { key: 'percentage', className: "text-sm text-gray-600" }, `Percentage: ${dataPoint.scdot_percentage?.toFixed(1)}%`),
-                dataPoint && React.createElement('p', { key: 'events', className: "text-sm text-gray-600" }, `Events: ${dataPoint.number_of_events}`)
-              ]);
-            }
-            return null;
-          };
+        // Update summary
+        function updateSummary(data, countTrend, lengthTrend) {
+            const years = data.map(d => d.year);
+            const counts = data.map(d => d.scdot_count);
+            const lengths = data.map(d => d.scdot_length);
+            
+            const summaryHTML = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                    <div>
+                        <strong>Time Period:</strong> ${Math.min(...years)} - ${Math.max(...years)}<br>
+                        <strong>Total Years:</strong> ${data.length}
+                    </div>
+                    <div>
+                        <strong>Count Trend:</strong> ${countTrend ? (countTrend.slope > 0 ? '+' : '') + countTrend.slope.toFixed(3) + ' days/year' : 'N/A'}<br>
+                        <strong>Length Trend:</strong> ${lengthTrend ? (lengthTrend.slope > 0 ? '+' : '') + lengthTrend.slope.toFixed(3) + ' days/year' : 'N/A'}
+                    </div>
+                    <div>
+                        <strong>Count Range:</strong> ${Math.min(...counts)} - ${Math.max(...counts)} days<br>
+                        <strong>Length Range:</strong> ${Math.min(...lengths)} - ${Math.max(...lengths)} days
+                    </div>
+                    <div>
+                        <strong>Threshold:</strong> ${currentThreshold}cm<br>
+                        <strong>Total Records:</strong> ${allData.length}
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('summaryContent').innerHTML = summaryHTML;
+            document.getElementById('summary').style.display = 'block';
+        }
 
-          const minYear = filteredData.length > 0 ? Math.min(...filteredData.map(d => d.year)) : 1945;
-          const maxYear = filteredData.length > 0 ? Math.max(...filteredData.map(d => d.year)) : 2015;
-          const countTrendData = getTrendLineData(trendLines.count, minYear, maxYear);
-          const lengthTrendData = getTrendLineData(trendLines.length, minYear, maxYear);
+        // Event listeners
+        document.getElementById('thresholdSlider').addEventListener('input', function(e) {
+            setThreshold(parseInt(e.target.value));
+        });
 
-          return React.createElement('div', {
-            className: "w-full max-w-6xl mx-auto p-6 bg-white"
-          }, [
-            React.createElement('div', { key: 'header', className: "mb-6" }, [
-              React.createElement('h2', {
-                key: 'title',
-                className: "text-2xl font-bold text-center mb-4"
-              }, `HAY RIVER A: SCDOT Length and Count Trends (≥ ${threshold} cm)`),
-              
-              React.createElement('div', { key: 'controls', className: "flex flex-col items-center space-y-4" }, [
-                React.createElement('div', { key: 'slider-container', className: "flex items-center space-x-4" }, [
-                  React.createElement('label', {
-                    key: 'label',
-                    className: "text-sm font-medium text-gray-700"
-                  }, "Snow Depth Threshold:"),
-                  React.createElement('div', { key: 'slider-wrapper', className: "flex items-center space-x-2" }, [
-                    React.createElement('span', { key: 'min-label', className: "text-sm text-gray-500" }, "10cm"),
-                    React.createElement('input', {
-                      key: 'slider',
-                      type: "range",
-                      min: "10",
-                      max: "90",
-                      step: "10",
-                      value: threshold,
-                      onChange: (e) => setThreshold(parseInt(e.target.value)),
-                      className: "w-64 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                    }),
-                    React.createElement('span', { key: 'max-label', className: "text-sm text-gray-500" }, "90cm")
-                  ]),
-                  React.createElement('div', {
-                    key: 'current-value',
-                    className: "bg-blue-100 px-3 py-1 rounded text-sm font-medium text-blue-800"
-                  }, `${threshold}cm`)
-                ]),
-                
-                React.createElement('div', { key: 'threshold-buttons', className: "flex items-center space-x-2 text-sm" }, [
-                  React.createElement('span', { key: 'available-label', className: "text-gray-600" }, "Available thresholds:"),
-                  React.createElement('div', { key: 'buttons', className: "flex flex-wrap gap-1" },
-                    availableThresholds.map(t => 
-                      React.createElement('span', {
-                        key: t,
-                        className: `px-2 py-1 rounded cursor-pointer transition-colors ${
-                          t === threshold 
-                            ? 'bg-blue-500 text-white' 
-                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`,
-                        onClick: () => setThreshold(t)
-                      }, `${t}cm`)
-                    )
-                  )
-                ])
-              ])
-            ]),
-
-            error && React.createElement('div', {
-              key: 'error',
-              className: "mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded"
-            }, `Error: ${error}`),
-
-            loading && React.createElement('div', {
-              key: 'loading',
-              className: "flex justify-center items-center h-96"
-            }, React.createElement('div', {
-              className: "text-lg text-gray-600"
-            }, "Loading data...")),
-
-            !loading && !error && filteredData.length > 0 && React.createElement('div', {
-              key: 'chart',
-              className: "h-96"
-            }, React.createElement(ResponsiveContainer, {
-              width: "100%",
-              height: "100%"
-            }, React.createElement(LineChart, {
-              data: filteredData,
-              margin: { top: 20, right: 30, left: 20, bottom: 5 }
-            }, [
-              React.createElement(CartesianGrid, {
-                key: 'grid',
-                stroke: "transparent"
-              }),
-              
-              // Horizontal reference lines
-              ...[0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220].map(value =>
-                React.createElement(ReferenceLine, {
-                  key: `horizontal-${value}`,
-                  y: value,
-                  stroke: "#e0e0e0",
-                  strokeDasharray: "3 3"
-                })
-              ),
-              
-              // Major vertical reference lines (every 5 years)
-              ...Array.from({length: Math.floor((maxYear - minYear) / 5) + 1}, (_, i) => minYear + i * 5).map(year =>
-                React.createElement(ReferenceLine, {
-                  key: `major-${year}`,
-                  x: year,
-                  stroke: "#e0e0e0",
-                  strokeDasharray: "3 3"
-                })
-              ),
-              
-              // Minor vertical reference lines (every year)
-              ...Array.from({length: maxYear - minYear + 1}, (_, i) => minYear + i)
-                .filter(year => year % 5 !== 0)
-                .map(year =>
-                  React.createElement(ReferenceLine, {
-                    key: `minor-${year}`,
-                    x: year,
-                    stroke: "#f0f0f0",
-                    strokeDasharray: "1 1"
-                  })
-                ),
-              
-              React.createElement(XAxis, {
-                key: 'xaxis',
-                dataKey: "year",
-                type: "number",
-                scale: "linear",
-                domain: [minYear, maxYear],
-                stroke: "#666",
-                ticks: Array.from({length: Math.floor((maxYear - minYear) / 5) + 1}, (_, i) => minYear + i * 5),
-                tick: { fontSize: 12 },
-                axisLine: { stroke: '#666' },
-                tickLine: { stroke: '#666', strokeWidth: 1 }
-              }),
-              
-              React.createElement(YAxis, {
-                key: 'yaxis',
-                label: { value: 'Days', angle: -90, position: 'insideLeft' },
-                stroke: "#666",
-                domain: [0, 220],
-                ticks: [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220],
-                tick: { fontSize: 12 },
-                axisLine: { stroke: '#666' },
-                tickLine: { stroke: '#666', strokeWidth: 1 }
-              }),
-              
-              React.createElement(Tooltip, {
-                key: 'tooltip',
-                content: CustomTooltip
-              }),
-              
-              React.createElement(Legend, { key: 'legend' }),
-              
-              // Data points
-              React.createElement(Line, {
-                key: 'count-line',
-                type: "monotone",
-                dataKey: "scdot_count",
-                stroke: "#ff7300",
-                strokeWidth: 0,
-                dot: { fill: '#ff7300', strokeWidth: 2, r: 3 },
-                name: "SCDOT Count",
-                connectNulls: false
-              }),
-              
-              React.createElement(Line, {
-                key: 'length-line',
-                type: "monotone",
-                dataKey: "scdot_length",
-                stroke: "#387908",
-                strokeWidth: 0,
-                dot: { fill: '#387908', strokeWidth: 2, r: 3 },
-                name: "SCDOT Length",
-                connectNulls: false
-              }),
-              
-              // Trend lines
-              countTrendData.length > 0 && React.createElement(Line, {
-                key: 'count-trend',
-                data: countTrendData,
-                type: "linear",
-                dataKey: "value",
-                stroke: "#ff7300",
-                strokeWidth: 2,
-                strokeDasharray: "5 5",
-                dot: false,
-                name: "Count Trend"
-              }),
-              
-              lengthTrendData.length > 0 && React.createElement(Line, {
-                key: 'length-trend',
-                data: lengthTrendData,
-                type: "linear",
-                dataKey: "value",
-                stroke: "#387908",
-                strokeWidth: 2,
-                strokeDasharray: "5 5",
-                dot: false,
-                name: "Length Trend"
-              })
-            ]))),
-
-            !loading && !error && filteredData.length > 0 && React.createElement('div', {
-              key: 'summary',
-              className: "mt-6 p-4 bg-gray-50 rounded"
-            }, [
-              React.createElement('h3', {
-                key: 'summary-title',
-                className: "font-semibold mb-2"
-              }, `Data Summary for ${threshold}cm threshold:`),
-              React.createElement('div', {
-                key: 'summary-grid',
-                className: "grid grid-cols-2 md:grid-cols-4 gap-4 text-sm"
-              }, [
-                React.createElement('div', { key: 'period' }, [
-                  React.createElement('p', { key: 'period-text' }, React.createElement('strong', {}, "Time Period: "), `${minYear} - ${maxYear}`),
-                  React.createElement('p', { key: 'years-text' }, React.createElement('strong', {}, "Total Years: "), filteredData.length)
-                ]),
-                React.createElement('div', { key: 'trends' }, [
-                  trendLines.count && React.createElement('p', { key: 'count-trend-text' }, React.createElement('strong', {}, "Count Trend: "), `${trendLines.count.slope > 0 ? '+' : ''}${trendLines.count.slope.toFixed(3)} days/year`),
-                  trendLines.length && React.createElement('p', { key: 'length-trend-text' }, React.createElement('strong', {}, "Length Trend: "), `${trendLines.length.slope > 0 ? '+' : ''}${trendLines.length.slope.toFixed(3)} days/year`)
-                ]),
-                React.createElement('div', { key: 'ranges' }, [
-                  React.createElement('p', { key: 'count-range' }, React.createElement('strong', {}, "Count Range: "), `${Math.min(...filteredData.map(d => d.scdot_count))} - ${Math.max(...filteredData.map(d => d.scdot_count))} days`),
-                  React.createElement('p', { key: 'length-range' }, React.createElement('strong', {}, "Length Range: "), `${Math.min(...filteredData.map(d => d.scdot_length))} - ${Math.max(...filteredData.map(d => d.scdot_length))} days`)
-                ]),
-                React.createElement('div', { key: 'data-info' }, [
-                  React.createElement('p', { key: 'threshold-count' }, React.createElement('strong', {}, "Available Thresholds: "), availableThresholds.length),
-                  React.createElement('p', { key: 'total-records' }, React.createElement('strong', {}, "Data Loaded: "), `${allData.length} total records`)
-                ])
-              ])
-            ])
-          ]);
-        };
-
-        ReactDOM.render(React.createElement(SCDOTInteractivePlot), document.getElementById('root'));
+        // Start loading data
+        console.log('Starting to load data...');
+        loadData();
     </script>
 </body>
 </html>
